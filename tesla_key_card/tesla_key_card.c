@@ -49,10 +49,9 @@ typedef struct {
     uint8_t uid[TESLA_NFC_UID_SIZE];
 } TeslaKeyCardViewModel;
 
-typedef struct {
-    TeslaNfcEvent event;
-    uint16_t crypto_time_ms;
-} TeslaKeyCardNfcEvent;
+/* The NFC layer hands up a full per-frame record; the GUI queue carries it
+ * verbatim so the tick handler can both update the screen and write the trace. */
+typedef TeslaNfcEventInfo TeslaKeyCardNfcEvent;
 
 typedef enum {
     TeslaKeyCardScreenMain,
@@ -76,9 +75,20 @@ typedef struct {
 /* Append one timestamped line to the on-SD trace. No-op if the log failed to
  * open. Called only from the GUI thread (tick handler), so the storage_file_sync
  * cannot stall the NFC worker. */
+static void tesla_key_card_format_hex(const uint8_t* data, size_t size, char* out, size_t out_size) {
+    static const char digits[] = "0123456789ABCDEF";
+    size_t written = 0;
+    for(size_t i = 0; i < size && written + 3U < out_size; ++i) {
+        out[written++] = digits[data[i] >> 4U];
+        out[written++] = digits[data[i] & 0x0FU];
+        out[written++] = ' ';
+    }
+    out[written] = '\0';
+}
+
 static void tesla_key_card_debug_log(TeslaKeyCardApp* app, const char* text) {
     if(!app->debug_log) return;
-    char line[64];
+    char line[128];
     const int length =
         snprintf(line, sizeof(line), "%lu %s\n", (unsigned long)furi_get_tick(), text);
     if(length <= 0) return;
@@ -185,16 +195,13 @@ static void tesla_key_card_show_reset_dialog(TeslaKeyCardApp* app) {
     dialog_ex_set_result_callback(app->reset_dialog, tesla_key_card_reset_dialog_callback);
 }
 
-static void tesla_key_card_nfc_event(TeslaNfcEvent event, uint16_t crypto_time_ms, void* context) {
+static void tesla_key_card_nfc_event(const TeslaNfcEventInfo* info, void* context) {
     TeslaKeyCardApp* app = context;
-    const TeslaKeyCardNfcEvent nfc_event = {
-        .event = event,
-        .crypto_time_ms = crypto_time_ms,
-    };
 
     /* The NFC callback runs on the high-priority listener worker. Never wait
-     * for GUI work here: status updates are best-effort diagnostics only. */
-    furi_message_queue_put(app->nfc_event_queue, &nfc_event, 0U);
+     * for GUI work here: just copy the record into the queue and return so the
+     * GUI thread does the drawing and the (blocking) SD trace write. */
+    furi_message_queue_put(app->nfc_event_queue, info, 0U);
 }
 
 static void
@@ -213,63 +220,62 @@ static void
         true);
 }
 
-static void tesla_key_card_handle_nfc_event(
-    TeslaKeyCardApp* app,
-    TeslaNfcEvent nfc_event,
-    uint16_t crypto_time_ms) {
-    char label[40];
-    switch(nfc_event) {
-    case TeslaNfcEventSelect:
-        snprintf(label, sizeof(label), "SELECT ok (9000)");
-        break;
-    case TeslaNfcEventGetPublicKey:
-        snprintf(label, sizeof(label), "GET_PUBLIC_KEY ok (9000)");
-        break;
-    case TeslaNfcEventAuthenticate:
-        snprintf(label, sizeof(label), "AUTHENTICATE ok (9000) ecdh=%ums", (unsigned)crypto_time_ms);
-        break;
-    case TeslaNfcEventGetCardInfo:
-        snprintf(label, sizeof(label), "GET_CARD_INFO ok (9000)");
-        break;
-    case TeslaNfcEventProtocolError:
-        snprintf(label, sizeof(label), "PROTOCOL_ERR (SW != 9000)");
-        break;
-    case TeslaNfcEventTransmitError:
-        snprintf(label, sizeof(label), "TRANSMIT_ERR");
-        break;
-    case TeslaNfcEventFieldOff:
-        snprintf(label, sizeof(label), "field off");
-        break;
-    case TeslaNfcEventHalted:
-        snprintf(label, sizeof(label), "halted");
-        break;
-    default:
-        snprintf(label, sizeof(label), "event %d", (int)nfc_event);
-        break;
+static void tesla_key_card_handle_nfc_event(TeslaKeyCardApp* app, const TeslaNfcEventInfo* info) {
+    /* One trace line per frame: the raw request bytes plus how we answered.
+     * This is what distinguishes "reader quits right after SELECT" from
+     * "reader sends command X and we reject it" -- the coarse event cannot. */
+    char line[96];
+    if(info->event == TeslaNfcEventFieldOff) {
+        snprintf(line, sizeof(line), "field off");
+    } else if(info->event == TeslaNfcEventHalted) {
+        snprintf(line, sizeof(line), "halted");
+    } else {
+        char hex[3U * TESLA_NFC_APDU_PREVIEW + 1U];
+        tesla_key_card_format_hex(info->preview, info->preview_len, hex, sizeof(hex));
+        if(info->crypto_time_ms > 0U) {
+            snprintf(
+                line,
+                sizeof(line),
+                "RX %uB [%s] SW=%04X resp=%uB ecdh=%ums",
+                (unsigned)info->apdu_len,
+                hex,
+                (unsigned)info->status_word,
+                (unsigned)info->response_len,
+                (unsigned)info->crypto_time_ms);
+        } else {
+            snprintf(
+                line,
+                sizeof(line),
+                "RX %uB [%s] SW=%04X resp=%uB",
+                (unsigned)info->apdu_len,
+                hex,
+                (unsigned)info->status_word,
+                (unsigned)info->response_len);
+        }
     }
-    tesla_key_card_debug_log(app, label);
+    tesla_key_card_debug_log(app, line);
 
     with_view_model(
         app->main_view,
         TeslaKeyCardViewModel * model,
         {
-            if(nfc_event == TeslaNfcEventSelect) {
+            if(info->event == TeslaNfcEventSelect) {
                 model->sessions++;
                 model->state = TeslaUiStatePresent;
-            } else if(nfc_event == TeslaNfcEventGetPublicKey) {
+            } else if(info->event == TeslaNfcEventGetPublicKey) {
                 /* The vehicle read our public key, so it advanced past SELECT.
                  * Surfacing this on-screen shows how far the exchange gets when
                  * no USB log is attached (e.g. diagnosing at the vehicle). */
                 model->state = TeslaUiStateReadingKey;
-            } else if(nfc_event == TeslaNfcEventAuthenticate) {
+            } else if(info->event == TeslaNfcEventAuthenticate) {
                 model->authentications++;
-                model->last_crypto_time_ms = crypto_time_ms;
+                model->last_crypto_time_ms = info->crypto_time_ms;
                 model->state = TeslaUiStateAuthenticated;
-            } else if(nfc_event == TeslaNfcEventFieldOff || nfc_event == TeslaNfcEventHalted) {
+            } else if(info->event == TeslaNfcEventFieldOff || info->event == TeslaNfcEventHalted) {
                 model->state = TeslaUiStateReady;
             } else if(
-                nfc_event == TeslaNfcEventTransmitError ||
-                nfc_event == TeslaNfcEventProtocolError) {
+                info->event == TeslaNfcEventTransmitError ||
+                info->event == TeslaNfcEventProtocolError) {
                 model->state = TeslaUiStateError;
             }
         },
@@ -288,7 +294,7 @@ static void tesla_key_card_tick_event_callback(void* context) {
 
     for(size_t i = 0; i < TESLA_NFC_EVENTS_PER_TICK; ++i) {
         if(furi_message_queue_get(app->nfc_event_queue, &event, 0U) != FuriStatusOk) break;
-        tesla_key_card_handle_nfc_event(app, event.event, event.crypto_time_ms);
+        tesla_key_card_handle_nfc_event(app, &event);
     }
 }
 

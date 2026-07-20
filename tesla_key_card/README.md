@@ -36,23 +36,29 @@ The applet advertises a large ISO 14443-4 frame-waiting time (ATS `TB1 = 0xE0`,
 FWI 14, roughly 4.9 s) because the AUTHENTICATE reply performs a software P-256
 ECDH synchronously on the NFC worker thread, and the firmware listener has no
 card-side S(WTX) mechanism — the response must arrive within the advertised FWT
-or the reader times out, drops the field, and restarts from SELECT (the app
-visibly flips between "Tesla is reading card" and "Ready"). If the exchange
-still misbehaves, capture the per-frame trace: run the app, then in another
-terminal open the serial CLI and stream the log while you present the Flipper:
+or the reader times out, drops the field, and restarts from SELECT.
 
-```sh
-ufbt cli        # then type: log
-```
+Two traces are captured, both showing every frame:
 
-The `TeslaNfc` lines report each received APDU as hex, the parsed command,
-returned status word, response size, the measured ECDH time in milliseconds,
-and any transmit error, plus field-off/halt events. The decisive datum is the
-`ecdh=<N>ms` value on the AUTHENTICATE frame: it must land well under the ~4.9 s
-FWT budget, and that frame must return `SW=9000`. The Flipper screen also now
-advances Ready → "Tesla is reading card" (SELECT) → "Sending card key..."
-(GET PUBLIC KEY) → Authenticated, so the stall point is visible even without the
-USB log attached at the vehicle.
+- **On the SD card** (works untethered — present the Flipper at the vehicle,
+  then read it back afterward): `/ext/apps_data/tesla_key_card/nfc_debug.log`,
+  truncated fresh each launch. Read it with qFlipper's file browser, or:
+
+  ```sh
+  ufbt cli        # then: storage read /ext/apps_data/tesla_key_card/nfc_debug.log
+  ```
+
+- **Over USB serial** (live, if a host is tethered during the tap): `ufbt cli`,
+  then type `log`, and watch the `TeslaNfc` lines.
+
+Each received frame is logged as `RX <n>B [<leading APDU bytes>] SW=<status>
+resp=<n>B`, with `ecdh=<N>ms` added on the AUTHENTICATE frame; field-off and
+halt events are logged too. This shows exactly what the reader sends and how the
+card answers, so the stall point is unambiguous — e.g. whether the vehicle quits
+right after SELECT or sends a later command the card rejects. The Flipper screen
+also advances Ready → "Tesla is reading card" (SELECT) → "Sending card key..."
+(GET PUBLIC KEY) → Authenticated, but the screen only shows the last state per
+100 ms tick, so the SD trace is authoritative.
 
 ## Tests
 

@@ -63,8 +63,14 @@ static bool tesla_nfc_authenticate(
     return success;
 }
 
-static void tesla_nfc_notify(TeslaNfc* nfc, TeslaNfcEvent event) {
-    if(nfc->callback) nfc->callback(event, (uint16_t)nfc->crypto_time_ms, nfc->callback_context);
+static void tesla_nfc_emit(TeslaNfc* nfc, const TeslaNfcEventInfo* info) {
+    if(nfc->callback) nfc->callback(info, nfc->callback_context);
+}
+
+/* Emit an event that carries no APDU (field off / halt). */
+static void tesla_nfc_emit_event(TeslaNfc* nfc, TeslaNfcEvent event) {
+    const TeslaNfcEventInfo info = {.event = event};
+    tesla_nfc_emit(nfc, &info);
 }
 
 /* Hex-encode up to `size` bytes into `out` as space-separated pairs, truncating
@@ -123,27 +129,42 @@ static NfcCommand tesla_nfc_listener_callback(NfcGenericEvent event, void* conte
             (unsigned)nfc->crypto_time_ms,
             (int)send_error);
 
+        /* Carry the raw request bytes, status word and sizes up to the GUI
+         * thread so the on-SD trace shows exactly what the reader sent and how
+         * we answered every frame -- essential for diagnosing a stall that the
+         * coarse event alone cannot localize. */
+        TeslaNfcEventInfo info = {
+            .crypto_time_ms = (uint16_t)nfc->crypto_time_ms,
+            .status_word = result.status_word,
+            .apdu_len = rx_size > 0xFFU ? 0xFFU : (uint8_t)rx_size,
+            .preview_len =
+                rx_size < TESLA_NFC_APDU_PREVIEW ? (uint8_t)rx_size : TESLA_NFC_APDU_PREVIEW,
+            .response_len = result.response_size > 0xFFU ? 0xFFU : (uint8_t)result.response_size,
+        };
+        memcpy(info.preview, rx_data, info.preview_len);
+
         if(send_error != Iso14443_4aErrorNone) {
-            tesla_nfc_notify(nfc, TeslaNfcEventTransmitError);
+            info.event = TeslaNfcEventTransmitError;
         } else if(result.command == TeslaApduCommandSelect && result.status_word == 0x9000U) {
-            tesla_nfc_notify(nfc, TeslaNfcEventSelect);
+            info.event = TeslaNfcEventSelect;
         } else if(result.command == TeslaApduCommandGetPublicKey && result.status_word == 0x9000U) {
-            tesla_nfc_notify(nfc, TeslaNfcEventGetPublicKey);
+            info.event = TeslaNfcEventGetPublicKey;
         } else if(result.command == TeslaApduCommandAuthenticate && result.status_word == 0x9000U) {
-            tesla_nfc_notify(nfc, TeslaNfcEventAuthenticate);
+            info.event = TeslaNfcEventAuthenticate;
         } else if(result.command == TeslaApduCommandGetCardInfo && result.status_word == 0x9000U) {
-            tesla_nfc_notify(nfc, TeslaNfcEventGetCardInfo);
-        } else if(result.status_word != 0x9000U) {
-            tesla_nfc_notify(nfc, TeslaNfcEventProtocolError);
+            info.event = TeslaNfcEventGetCardInfo;
+        } else {
+            info.event = TeslaNfcEventProtocolError;
         }
+        tesla_nfc_emit(nfc, &info);
     } else if(listener_event->type == Iso14443_4aListenerEventTypeFieldOff) {
         FURI_LOG_I(TAG, "field off");
         tesla_apdu_reset_session(&nfc->apdu);
-        tesla_nfc_notify(nfc, TeslaNfcEventFieldOff);
+        tesla_nfc_emit_event(nfc, TeslaNfcEventFieldOff);
     } else if(listener_event->type == Iso14443_4aListenerEventTypeHalted) {
         FURI_LOG_I(TAG, "halted");
         tesla_apdu_reset_session(&nfc->apdu);
-        tesla_nfc_notify(nfc, TeslaNfcEventHalted);
+        tesla_nfc_emit_event(nfc, TeslaNfcEventHalted);
     }
 
     return NfcCommandContinue;

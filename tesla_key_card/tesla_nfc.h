@@ -20,7 +20,20 @@ typedef enum {
     TeslaNfcEventTransmitError,
 } TeslaNfcEvent;
 
-typedef void (*TeslaNfcEventCallback)(TeslaNfcEvent event, uint16_t crypto_time_ms, void* context);
+/* Leading APDU bytes captured for the diagnostic trace (CLA INS P1 P2 Lc ...). */
+#define TESLA_NFC_APDU_PREVIEW 10U
+
+typedef struct {
+    TeslaNfcEvent event;
+    uint16_t crypto_time_ms; /* ECDH wall time; AUTHENTICATE only, else 0 */
+    uint16_t status_word; /* APDU status word for data frames, else 0 */
+    uint8_t apdu_len; /* full received APDU length, capped at 255 */
+    uint8_t preview_len; /* valid bytes in preview[] */
+    uint8_t preview[TESLA_NFC_APDU_PREVIEW];
+    uint8_t response_len; /* bytes sent back, capped at 255 */
+} TeslaNfcEventInfo;
+
+typedef void (*TeslaNfcEventCallback)(const TeslaNfcEventInfo* info, void* context);
 
 TeslaNfc* tesla_nfc_alloc(
     TeslaCrypto* crypto,
