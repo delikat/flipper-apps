@@ -1,0 +1,14 @@
+App(
+    appid="mfc_ndef_format",
+    name="MFC NDEF Format",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="mfc_ndef_format_app",
+    requires=["gui"],
+    targets=["f7"],
+    stack_size=4 * 1024,
+    sources=["*.c", "!tests"],
+    fap_version="0.1.0",
+    fap_category="NFC",
+    fap_description="Format a MIFARE Classic 1K as an empty NDEF (NFC) tag, like Proxmark 'hf mf ndefformat'",
+    fap_author="ported from Proxmark3",
+)

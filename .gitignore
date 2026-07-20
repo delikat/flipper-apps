@@ -1,0 +1,13 @@
+# ufbt / build output (any app)
+.ufbt/
+.vscode/
+dist/
+*.fap
+*.elf
+
+# compiled host test binaries
+mfc_ndef_format/tests/test_ndef_layout
+tesla_key_card/tests/test_apdu
+
+# macOS
+.DS_Store

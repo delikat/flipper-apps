@@ -1,0 +1,14 @@
+App(
+    appid="tesla_key_card",
+    name="Tesla Key Card",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="tesla_key_card_app",
+    requires=["gui"],
+    targets=["f7"],
+    stack_size=8 * 1024,
+    sources=["*.c*", "!tests"],
+    fap_version="0.1.0",
+    fap_category="NFC",
+    fap_description="Experimental Tesla key card implementation",
+    fap_libs=["mbedtls"],
+)
