@@ -1,0 +1,22 @@
+# Flipper Application Catalog manifest for mfc_ndef_format.
+#
+# To publish: open a PR against github.com/flipperdevices/flipper-application-catalog
+# adding this manifest under applications/Main/NFC/mfc_ndef_format/, together with
+# the assets in this .catalog/ directory.
+#
+# Before submitting, still TODO:
+#   - add a `fap_icon` (10x10 .png) to application.fam (required by the catalog)
+#   - add real screenshots under .catalog/screenshots/ (replace 1.png)
+#   - set commit_sha below to the exact released commit
+#   - verify field names against the catalog's current manifest schema
+sourcecode:
+  type: git
+  location:
+    origin: https://github.com/delikat/flipper-apps.git
+    commit_sha: "0000000000000000000000000000000000000000" # TODO: release commit
+    subdir: mfc_ndef_format
+short_description: Format a MIFARE Classic 1K as an empty NDEF (NFC) tag.
+description: "@.catalog/README.md"
+changelog: "@.catalog/changelog.md"
+screenshots:
+  - .catalog/screenshots/1.png

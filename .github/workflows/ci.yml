@@ -1,0 +1,39 @@
+name: CI
+
+# First-party GitHub Actions only (actions/checkout, actions/setup-python).
+# No third-party actions. Everything else is plain shell.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  host-tests:
+    name: Host tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: mfc_ndef_format
+        run: sh mfc_ndef_format/tests/run_tests.sh
+      - name: tesla_key_card
+        run: sh tesla_key_card/tests/run_tests.sh
+
+  build-faps:
+    name: Build FAP (${{ matrix.app }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [mfc_ndef_format, tesla_key_card]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install ufbt
+        run: python -m pip install --upgrade ufbt
+      - name: Point ufbt at the Unleashed SDK (unlshd-089, API 87.8)
+        run: ufbt update --url=https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-089/flipper-z-f7-sdk-unlshd-089.zip
+      - name: Build ${{ matrix.app }}
+        working-directory: ${{ matrix.app }}
+        run: ufbt

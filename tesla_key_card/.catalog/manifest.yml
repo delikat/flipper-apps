@@ -1,0 +1,24 @@
+# Flipper Application Catalog manifest for tesla_key_card.
+#
+# To publish: open a PR against github.com/flipperdevices/flipper-application-catalog
+# adding this manifest under applications/Main/NFC/tesla_key_card/, together with
+# the assets in this .catalog/ directory.
+#
+# Before submitting, still TODO:
+#   - add a `fap_icon` (10x10 .png) to application.fam (required by the catalog)
+#   - add real screenshots under .catalog/screenshots/ (replace 1.png)
+#   - set commit_sha below to the exact released commit
+#   - verify field names against the catalog's current manifest schema
+#   - note: the catalog may not accept apps that interact with proprietary
+#     vehicle systems; confirm eligibility before submitting.
+sourcecode:
+  type: git
+  location:
+    origin: https://github.com/delikat/flipper-apps.git
+    commit_sha: "0000000000000000000000000000000000000000" # TODO: release commit
+    subdir: tesla_key_card
+short_description: Experimental Tesla key-card NFC applet flow (fresh identity).
+description: "@.catalog/README.md"
+changelog: "@.catalog/changelog.md"
+screenshots:
+  - .catalog/screenshots/1.png
