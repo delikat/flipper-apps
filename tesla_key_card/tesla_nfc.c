@@ -19,13 +19,22 @@
 #define TAG "TeslaNfc"
 
 /* FSCI=6 gives a 96-byte frame, enough for Tesla's 86-byte auth APDU plus
- * ISO-DEP overhead. TB1 advertises FWI=10 (about 309 ms), which leaves the
- * synchronous P-256 calculation enough response time on the F7. TA1 and TC1
- * are omitted: FW 089 acknowledges PPS but does not change radio bit rates,
- * and CID/NAD are not required by the Tesla exchange. */
+ * ISO-DEP overhead. TB1 advertises FWI=14 (~4.9 s frame waiting time). The
+ * AUTHENTICATE reply requires a software P-256 ECDH that runs synchronously on
+ * the NFC worker thread and can take several hundred ms on the F7, and the
+ * firmware listener has no card-side S(WTX) path, so the whole calculation must
+ * finish inside FWT or the reader times out and restarts from SELECT (the
+ * "flashing between reading and ready" failure). FWI=14 is the ISO14443-4
+ * maximum (15 is RFU) and gives the widest timing margin; the reader still
+ * proceeds the instant the reply arrives, so a large FWT costs nothing when the
+ * card is fast. TA1 and TC1 are omitted: FW 089 acknowledges PPS but does not
+ * change radio bit rates, and CID/NAD are not required by the Tesla exchange. */
 #define TESLA_ATS_TL  3U
 #define TESLA_ATS_T0  0x26U
-#define TESLA_ATS_TB1 0xA0U
+#define TESLA_ATS_TB1 0xE0U
+
+/* Number of received APDU bytes to hex-dump in the diagnostic log line. */
+#define TESLA_NFC_LOG_HEX_BYTES 24U
 
 struct TeslaNfc {
     TeslaCrypto* crypto;
@@ -58,6 +67,20 @@ static void tesla_nfc_notify(TeslaNfc* nfc, TeslaNfcEvent event) {
     if(nfc->callback) nfc->callback(event, (uint16_t)nfc->crypto_time_ms, nfc->callback_context);
 }
 
+/* Hex-encode up to `size` bytes into `out` as space-separated pairs, truncating
+ * to fit `out_size`. Used only for diagnostic logging; bounded so it is safe to
+ * build on the NFC worker stack alongside the P-256 calculation. */
+static void tesla_nfc_format_hex(const uint8_t* data, size_t size, char* out, size_t out_size) {
+    static const char digits[] = "0123456789ABCDEF";
+    size_t written = 0;
+    for(size_t i = 0; i < size && written + 3U < out_size; ++i) {
+        out[written++] = digits[data[i] >> 4U];
+        out[written++] = digits[data[i] & 0x0FU];
+        out[written++] = ' ';
+    }
+    out[written] = '\0';
+}
+
 static NfcCommand tesla_nfc_listener_callback(NfcGenericEvent event, void* context) {
     furi_assert(context);
     furi_assert(event.protocol == NfcProtocolIso14443_4a);
@@ -72,6 +95,16 @@ static NfcCommand tesla_nfc_listener_callback(NfcGenericEvent event, void* conte
         const uint8_t* rx_data = bit_buffer_get_data(rx);
         uint8_t response[TESLA_APDU_RESPONSE_MAX] = {0};
 
+        char rx_hex[3U * TESLA_NFC_LOG_HEX_BYTES + 1U];
+        const size_t rx_hex_bytes =
+            rx_size < TESLA_NFC_LOG_HEX_BYTES ? rx_size : TESLA_NFC_LOG_HEX_BYTES;
+        tesla_nfc_format_hex(rx_data, rx_hex_bytes, rx_hex, sizeof(rx_hex));
+        FURI_LOG_I(
+            TAG, "RX %u B: %s%s", (unsigned)rx_size, rx_hex, rx_size > rx_hex_bytes ? "..." : "");
+
+        /* Cleared each frame so the log line below reports 0 ms for every command
+         * except AUTHENTICATE, which sets it from the ECDH timing. */
+        nfc->crypto_time_ms = 0U;
         const TeslaApduResult result =
             tesla_apdu_process(&nfc->apdu, rx_data, rx_size, response, sizeof(response));
 
@@ -80,6 +113,15 @@ static NfcCommand tesla_nfc_listener_callback(NfcGenericEvent event, void* conte
         const Iso14443_4aError send_error =
             iso14443_4a_listener_send_block((Iso14443_4aListener*)event.instance, nfc->tx_buffer);
         tesla_secure_zero(response, sizeof(response));
+
+        FURI_LOG_I(
+            TAG,
+            "cmd=%d SW=%04X resp=%uB ecdh=%ums send=%d",
+            (int)result.command,
+            (unsigned)result.status_word,
+            (unsigned)result.response_size,
+            (unsigned)nfc->crypto_time_ms,
+            (int)send_error);
 
         if(send_error != Iso14443_4aErrorNone) {
             tesla_nfc_notify(nfc, TeslaNfcEventTransmitError);
@@ -95,9 +137,11 @@ static NfcCommand tesla_nfc_listener_callback(NfcGenericEvent event, void* conte
             tesla_nfc_notify(nfc, TeslaNfcEventProtocolError);
         }
     } else if(listener_event->type == Iso14443_4aListenerEventTypeFieldOff) {
+        FURI_LOG_I(TAG, "field off");
         tesla_apdu_reset_session(&nfc->apdu);
         tesla_nfc_notify(nfc, TeslaNfcEventFieldOff);
     } else if(listener_event->type == Iso14443_4aListenerEventTypeHalted) {
+        FURI_LOG_I(TAG, "halted");
         tesla_apdu_reset_session(&nfc->apdu);
         tesla_nfc_notify(nfc, TeslaNfcEventHalted);
     }

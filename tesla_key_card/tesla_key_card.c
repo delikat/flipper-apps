@@ -5,6 +5,8 @@
 
 #include <furi.h>
 
+#include <storage/storage.h>
+
 #include <gui/elements.h>
 #include <gui/gui.h>
 #include <gui/modules/dialog_ex.h>
@@ -24,10 +26,16 @@
 #define TESLA_NFC_EVENTS_PER_TICK  8U
 #define TESLA_UI_TICK_MS           100U
 
+/* Persistent trace of the NFC exchange, written from the GUI thread (never the
+ * NFC worker) so SD latency stays off the ISO-DEP critical path. Truncated each
+ * launch. Read it back with: ufbt cli -> storage read /ext/apps_data/tesla_key_card/nfc_debug.log */
+#define TESLA_DEBUG_LOG_PATH APP_DATA_PATH("nfc_debug.log")
+
 typedef enum {
     TeslaUiStateInitializing,
     TeslaUiStateReady,
     TeslaUiStatePresent,
+    TeslaUiStateReadingKey,
     TeslaUiStateAuthenticated,
     TeslaUiStateError,
     TeslaUiStateResetting,
@@ -61,7 +69,24 @@ typedef struct {
     TeslaIdentity identity;
     TeslaCrypto* crypto;
     TeslaNfc* nfc;
+    Storage* storage;
+    File* debug_log;
 } TeslaKeyCardApp;
+
+/* Append one timestamped line to the on-SD trace. No-op if the log failed to
+ * open. Called only from the GUI thread (tick handler), so the storage_file_sync
+ * cannot stall the NFC worker. */
+static void tesla_key_card_debug_log(TeslaKeyCardApp* app, const char* text) {
+    if(!app->debug_log) return;
+    char line[64];
+    const int length =
+        snprintf(line, sizeof(line), "%lu %s\n", (unsigned long)furi_get_tick(), text);
+    if(length <= 0) return;
+    const size_t to_write =
+        length >= (int)sizeof(line) ? sizeof(line) - 1U : (size_t)length;
+    storage_file_write(app->debug_log, line, to_write);
+    storage_file_sync(app->debug_log);
+}
 
 static const char* tesla_key_card_state_text(TeslaUiState state) {
     switch(state) {
@@ -71,6 +96,8 @@ static const char* tesla_key_card_state_text(TeslaUiState state) {
         return "Ready - present to Tesla";
     case TeslaUiStatePresent:
         return "Tesla is reading card";
+    case TeslaUiStateReadingKey:
+        return "Sending card key...";
     case TeslaUiStateAuthenticated:
         return "Authenticated";
     case TeslaUiStateError:
@@ -190,6 +217,38 @@ static void tesla_key_card_handle_nfc_event(
     TeslaKeyCardApp* app,
     TeslaNfcEvent nfc_event,
     uint16_t crypto_time_ms) {
+    char label[40];
+    switch(nfc_event) {
+    case TeslaNfcEventSelect:
+        snprintf(label, sizeof(label), "SELECT ok (9000)");
+        break;
+    case TeslaNfcEventGetPublicKey:
+        snprintf(label, sizeof(label), "GET_PUBLIC_KEY ok (9000)");
+        break;
+    case TeslaNfcEventAuthenticate:
+        snprintf(label, sizeof(label), "AUTHENTICATE ok (9000) ecdh=%ums", (unsigned)crypto_time_ms);
+        break;
+    case TeslaNfcEventGetCardInfo:
+        snprintf(label, sizeof(label), "GET_CARD_INFO ok (9000)");
+        break;
+    case TeslaNfcEventProtocolError:
+        snprintf(label, sizeof(label), "PROTOCOL_ERR (SW != 9000)");
+        break;
+    case TeslaNfcEventTransmitError:
+        snprintf(label, sizeof(label), "TRANSMIT_ERR");
+        break;
+    case TeslaNfcEventFieldOff:
+        snprintf(label, sizeof(label), "field off");
+        break;
+    case TeslaNfcEventHalted:
+        snprintf(label, sizeof(label), "halted");
+        break;
+    default:
+        snprintf(label, sizeof(label), "event %d", (int)nfc_event);
+        break;
+    }
+    tesla_key_card_debug_log(app, label);
+
     with_view_model(
         app->main_view,
         TeslaKeyCardViewModel * model,
@@ -197,6 +256,11 @@ static void tesla_key_card_handle_nfc_event(
             if(nfc_event == TeslaNfcEventSelect) {
                 model->sessions++;
                 model->state = TeslaUiStatePresent;
+            } else if(nfc_event == TeslaNfcEventGetPublicKey) {
+                /* The vehicle read our public key, so it advanced past SELECT.
+                 * Surfacing this on-screen shows how far the exchange gets when
+                 * no USB log is attached (e.g. diagnosing at the vehicle). */
+                model->state = TeslaUiStateReadingKey;
             } else if(nfc_event == TeslaNfcEventAuthenticate) {
                 model->authentications++;
                 model->last_crypto_time_ms = crypto_time_ms;
@@ -352,6 +416,13 @@ static TeslaKeyCardApp* tesla_key_card_app_alloc(void) {
         furi_message_queue_alloc(TESLA_NFC_EVENT_QUEUE_SIZE, sizeof(TeslaKeyCardNfcEvent));
     app->screen = TeslaKeyCardScreenMain;
 
+    app->storage = furi_record_open(RECORD_STORAGE);
+    app->debug_log = storage_file_alloc(app->storage);
+    if(!storage_file_open(app->debug_log, TESLA_DEBUG_LOG_PATH, FSAM_WRITE, FSOM_CREATE_ALWAYS)) {
+        storage_file_free(app->debug_log);
+        app->debug_log = NULL;
+    }
+
     view_allocate_model(app->main_view, ViewModelTypeLocking, sizeof(TeslaKeyCardViewModel));
     view_set_draw_callback(app->main_view, tesla_key_card_draw_callback);
     view_set_input_callback(app->main_view, tesla_key_card_main_input_callback);
@@ -374,6 +445,11 @@ static void tesla_key_card_app_free(TeslaKeyCardApp* app) {
     if(app->nfc) tesla_nfc_free(app->nfc);
     tesla_crypto_free(app->crypto);
     tesla_identity_clear(&app->identity);
+    if(app->debug_log) {
+        storage_file_close(app->debug_log);
+        storage_file_free(app->debug_log);
+    }
+    furi_record_close(RECORD_STORAGE);
     furi_message_queue_free(app->nfc_event_queue);
     view_dispatcher_remove_view(app->view_dispatcher, 1U);
     view_dispatcher_remove_view(app->view_dispatcher, 0U);
@@ -404,6 +480,18 @@ int32_t tesla_key_card_app(void* context) {
             memcpy(model->uid, app->identity.uid, sizeof(model->uid));
         },
         true);
+
+    char launch[48];
+    snprintf(
+        launch,
+        sizeof(launch),
+        "=== launch uid=%02X%02X%02X%02X nfc=%d ===",
+        app->identity.uid[0],
+        app->identity.uid[1],
+        app->identity.uid[2],
+        app->identity.uid[3],
+        app->nfc ? 1 : 0);
+    tesla_key_card_debug_log(app, launch);
 
     view_dispatcher_switch_to_view(app->view_dispatcher, 0U);
     view_dispatcher_run(app->view_dispatcher);

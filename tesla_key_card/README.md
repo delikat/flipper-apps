@@ -30,6 +30,30 @@ ufbt launch
 the NFC presentation is intentionally limited to ISO-DEP 106 kbit/s, and the
 vehicle-specific pairing flow must still be verified on the owner's Model Y.
 
+## Debugging the NFC exchange
+
+The applet advertises a large ISO 14443-4 frame-waiting time (ATS `TB1 = 0xE0`,
+FWI 14, roughly 4.9 s) because the AUTHENTICATE reply performs a software P-256
+ECDH synchronously on the NFC worker thread, and the firmware listener has no
+card-side S(WTX) mechanism — the response must arrive within the advertised FWT
+or the reader times out, drops the field, and restarts from SELECT (the app
+visibly flips between "Tesla is reading card" and "Ready"). If the exchange
+still misbehaves, capture the per-frame trace: run the app, then in another
+terminal open the serial CLI and stream the log while you present the Flipper:
+
+```sh
+ufbt cli        # then type: log
+```
+
+The `TeslaNfc` lines report each received APDU as hex, the parsed command,
+returned status word, response size, the measured ECDH time in milliseconds,
+and any transmit error, plus field-off/halt events. The decisive datum is the
+`ecdh=<N>ms` value on the AUTHENTICATE frame: it must land well under the ~4.9 s
+FWT budget, and that frame must return `SW=9000`. The Flipper screen also now
+advances Ready → "Tesla is reading card" (SELECT) → "Sending card key..."
+(GET PUBLIC KEY) → Authenticated, so the stall point is visible even without the
+USB log attached at the vehicle.
+
 ## Tests
 
 ```sh
