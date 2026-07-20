@@ -33,7 +33,7 @@ jobs:
       - name: Install ufbt
         run: python -m pip install --upgrade ufbt
       - name: Point ufbt at the Unleashed SDK (unlshd-089, API 87.8)
-        run: ufbt update --url=https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-089/flipper-z-f7-sdk-unlshd-089.zip
+        run: ufbt update --hw-target=f7 --url=https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-089/flipper-z-f7-sdk-unlshd-089.zip
       - name: Build ${{ matrix.app }}
         working-directory: ${{ matrix.app }}
         run: ufbt
