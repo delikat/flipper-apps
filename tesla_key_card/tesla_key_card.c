@@ -168,6 +168,11 @@ static bool tesla_key_card_main_input_callback(InputEvent* event, void* context)
         view_dispatcher_send_custom_event(app->view_dispatcher, TESLA_APP_EVENT_RESET_REQUEST);
         return true;
     }
+    /* The screen labels the left button "Exit"; wire it (Back exits too). */
+    if(event->type == InputTypeShort && event->key == InputKeyLeft) {
+        view_dispatcher_stop(app->view_dispatcher);
+        return true;
+    }
     return false;
 }
 
