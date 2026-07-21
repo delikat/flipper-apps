@@ -18,20 +18,27 @@
 
 #define TAG "TeslaNfc"
 
-/* FSCI=6 gives a 96-byte frame, enough for Tesla's 86-byte auth APDU plus
- * ISO-DEP overhead. TB1 advertises FWI=14 (~4.9 s frame waiting time). The
- * AUTHENTICATE reply requires a software P-256 ECDH that runs synchronously on
- * the NFC worker thread and can take several hundred ms on the F7, and the
- * firmware listener has no card-side S(WTX) path, so the whole calculation must
- * finish inside FWT or the reader times out and restarts from SELECT (the
- * "flashing between reading and ready" failure). FWI=14 is the ISO14443-4
- * maximum (15 is RFU) and gives the widest timing margin; the reader still
- * proceeds the instant the reply arrives, so a large FWT costs nothing when the
- * card is fast. TA1 and TC1 are omitted: FW 089 acknowledges PPS but does not
- * change radio bit rates, and CID/NAD are not required by the Tesla exchange. */
-#define TESLA_ATS_TL  3U
-#define TESLA_ATS_T0  0x26U
-#define TESLA_ATS_TB1 0xE0U
+/* Match the ATS an official Tesla key card presents: 05 78 77 91 02.
+ *   T0  = 0x78  -> TA1, TB1, TC1 all present; FSCI = 8 (256-byte frame).
+ *   TA1 = 0x77  -> the card's bit-rate capability byte.
+ *   TB1 = 0x91  -> FWI = 9 (~2.5 s frame waiting time), SFGI = 1.
+ *   TC1 = 0x02  -> CID supported.
+ *
+ * On-device capture showed the vehicle SELECT our applet, get 9000, then drop
+ * the field ~500 ms later WITHOUT ever sending GET_PUBLIC_KEY. The vehicle
+ * validates the card at ISO-DEP activation, and our previous minimal ATS
+ * (03 26 E0: no TA1/TC1, FSCI=6, no CID) did not look like a real card.
+ * Advertising CID also matters at the frame layer: the firmware listener SKIPS a
+ * CID-tagged I-block when the ATS did not claim CID support (TC1 bit 1), so a
+ * post-SELECT command carrying a CID would be dropped before our code sees it,
+ * which fits the symptom exactly. Note the reader ignores the advertised FWT
+ * here (it uses its own ~500 ms window), so a large FWI does not buy the ECDH
+ * more time -- keep the value the real card uses. */
+#define TESLA_ATS_TL  5U
+#define TESLA_ATS_T0  0x78U
+#define TESLA_ATS_TA1 0x77U
+#define TESLA_ATS_TB1 0x91U
+#define TESLA_ATS_TC1 0x02U
 
 /* Number of received APDU bytes to hex-dump in the diagnostic log line. */
 #define TESLA_NFC_LOG_HEX_BYTES 24U
@@ -195,7 +202,9 @@ TeslaNfc* tesla_nfc_alloc(
 
     nfc->data->ats_data.tl = TESLA_ATS_TL;
     nfc->data->ats_data.t0 = TESLA_ATS_T0;
+    nfc->data->ats_data.ta_1 = TESLA_ATS_TA1;
     nfc->data->ats_data.tb_1 = TESLA_ATS_TB1;
+    nfc->data->ats_data.tc_1 = TESLA_ATS_TC1;
     nfc->tx_buffer = bit_buffer_alloc(96U);
     tesla_apdu_init(&nfc->apdu, tesla_crypto_get_public_key(crypto), tesla_nfc_authenticate, nfc);
     return nfc;
