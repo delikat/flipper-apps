@@ -18,15 +18,24 @@
 
 #define TAG "TeslaNfc"
 
-/* Present a fuller, real-card-like ATS: 04 38 77 91.
+/* Present a fuller, real-card-like ATS: 04 38 77 E1.
  *   T0  = 0x38  -> TA1 and TB1 present; FSCI = 8 (256-byte frame). NOT TC1.
  *   TA1 = 0x77  -> the bit-rate capability byte an official Tesla card uses.
- *   TB1 = 0x91  -> FWI = 9, SFGI = 1 (the official card's values).
+ *   TB1 = 0xE1  -> FWI = 14 (max, ~4.9 s), SFGI = 1.
  *
  * On-device capture showed the vehicle SELECT our applet, get 9000, then drop
  * the field ~500 ms later WITHOUT ever sending GET_PUBLIC_KEY -- so it validates
  * the card at ISO-DEP activation, and our earlier minimal ATS (03 26 E0: no TA1,
  * FSCI=6) did not look like a real card. This restores the richer presentation.
+ *
+ * FWI deviates from the official card's 0x91/FWI=9 (~155 ms) ON PURPOSE. A real
+ * card answers AUTHENTICATE from hardware crypto in tens of ms, so 155 ms is
+ * plenty for it. Our AUTHENTICATE runs a software P-256 ECDH measured at ~471 ms
+ * (startup self-test), and the firmware listener cannot send S(WTX) to extend
+ * time -- so the advertised FWT is our ONLY lever to buy the slow reply room.
+ * Advertise the maximum (FWI=14). This does not affect SELECT (an earlier
+ * FWI=14 build still SELECTed fine, and the reader ignored the 4.9 s wait,
+ * dropping the field at its own ~500 ms), and a larger FWT can never hurt.
  *
  * We deliberately DO NOT advertise CID (TC1 bit 1), even though a real card
  * does. The reader is demonstrably sending UNTAGGED I-blocks: SELECT already
@@ -36,12 +45,11 @@
  * an untagged I-block whenever that nibble is non-zero -- which would drop the
  * very SELECT that currently works. Claiming CID cannot unblock anything here
  * (the reader is not tagging frames) and is pure downside on a one-shot trip;
- * revisit only after a confirmed on-device SELECT with CID advertised. The
- * reader also ignores the advertised FWT (it uses its own ~500 ms window). */
+ * revisit only after a confirmed on-device SELECT with CID advertised. */
 #define TESLA_ATS_TL  4U
 #define TESLA_ATS_T0  0x38U
 #define TESLA_ATS_TA1 0x77U
-#define TESLA_ATS_TB1 0x91U
+#define TESLA_ATS_TB1 0xE1U
 
 /* Number of received APDU bytes to hex-dump in the diagnostic log line. */
 #define TESLA_NFC_LOG_HEX_BYTES 24U
