@@ -235,7 +235,14 @@ static void gen4_dump_show_result(Gen4DumpApp* app) {
     case Gen4DumpResultNotGen4:
         notification_message(app->notifications, &sequence_error);
         gen4_dump_show_widget_message(
-            app, "Not a Gen4 card", "Backdoor did not answer.\nNot a UMC, or a custom\npassword is set.");
+            app,
+            "Wrong password",
+            "Default + entered pw\nboth failed. Enter the\nright one, or not a UMC.");
+        return;
+    case Gen4DumpResultLostField:
+        notification_message(app->notifications, &sequence_error);
+        gen4_dump_show_widget_message(
+            app, "Card moved", "Lost contact mid-scan.\nHold it flat & steady,\nthen try again.");
         return;
     case Gen4DumpResultUnsupported:
         notification_message(app->notifications, &sequence_error);

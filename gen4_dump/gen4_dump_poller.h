@@ -25,8 +25,10 @@ extern "C" {
 
 typedef enum {
     Gen4DumpResultOk,
-    Gen4DumpResultNoCard, // no ISO14443-3A card in the field
-    Gen4DumpResultNotGen4, // a card is present but the backdoor did not answer
+    Gen4DumpResultNoCard, // no ISO14443-3A card ever seen in the field
+    Gen4DumpResultNotGen4, // card stayed present through the whole password sweep but
+                           // nothing unlocked it: wrong/custom password, or not a UMC
+    Gen4DumpResultLostField, // card left the field mid-sweep (moved / lost contact)
     Gen4DumpResultUnsupported, // Gen4 card, but an emulated type we can't dump
     Gen4DumpResultReadFailed, // backdoor read failed mid-dump (card removed?)
     Gen4DumpResultCanceled, // stop flag was raised

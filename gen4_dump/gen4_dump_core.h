@@ -40,11 +40,6 @@ extern "C" {
 /** Largest backdoor frame: prefix + pwd(4) + cmd + up to 32 config bytes. */
 #define GEN4_DUMP_MAX_FRAME (1 + GEN4_DUMP_PASSWORD_LEN + 1 + GEN4_DUMP_CONFIG_SIZE)
 
-/** Small dictionary of common backdoor passwords auto-tried during a dump. */
-#define GEN4_DUMP_COMMON_PASSWORD_COUNT (8)
-extern const uint8_t
-    gen4_dump_common_passwords[GEN4_DUMP_COMMON_PASSWORD_COUNT][GEN4_DUMP_PASSWORD_LEN];
-
 typedef enum {
     Gen4DumpProtocolMfClassic = 0x00,
     Gen4DumpProtocolMfUltralight = 0x01,

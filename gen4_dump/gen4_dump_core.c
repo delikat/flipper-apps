@@ -7,19 +7,6 @@
 
 #include <string.h>
 
-// Tried in order during a dump; the user-supplied password is tried first.
-// The factory default is all-zero; the rest are passwords people commonly set.
-const uint8_t gen4_dump_common_passwords[GEN4_DUMP_COMMON_PASSWORD_COUNT][GEN4_DUMP_PASSWORD_LEN] = {
-    {0x00, 0x00, 0x00, 0x00}, // factory default
-    {0x11, 0x22, 0x33, 0x44},
-    {0x00, 0x11, 0x22, 0x33},
-    {0xFF, 0xFF, 0xFF, 0xFF},
-    {0x12, 0x34, 0x56, 0x78},
-    {0xAA, 0x55, 0xAA, 0x55},
-    {0xA1, 0xA2, 0xA3, 0xA4},
-    {0x00, 0x00, 0x00, 0x01},
-};
-
 // GTU config-block byte offsets (Proxmark doc/magic_cards_notes.md).
 #define CFG_OFF_PROTOCOL     (0)
 #define CFG_OFF_UID_LEN      (1)

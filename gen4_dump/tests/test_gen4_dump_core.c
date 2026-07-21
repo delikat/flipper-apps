@@ -252,26 +252,6 @@ static void test_key_and_uid(void) {
     CHECK_EQ(uid7[6], 0x91);
 }
 
-static void test_common_passwords(void) {
-    // The factory default must be first (fastest common hit), and the user's
-    // two known candidates must be present.
-    CHECK_EQ(GEN4_DUMP_COMMON_PASSWORD_COUNT, 8);
-    const uint8_t* p0 = gen4_dump_common_passwords[0];
-    CHECK_EQ(p0[0], 0x00);
-    CHECK_EQ(p0[1], 0x00);
-    CHECK_EQ(p0[2], 0x00);
-    CHECK_EQ(p0[3], 0x00);
-
-    bool has_11223344 = false, has_00112233 = false;
-    for(int i = 0; i < GEN4_DUMP_COMMON_PASSWORD_COUNT; i++) {
-        const uint8_t* p = gen4_dump_common_passwords[i];
-        if(p[0] == 0x11 && p[1] == 0x22 && p[2] == 0x33 && p[3] == 0x44) has_11223344 = true;
-        if(p[0] == 0x00 && p[1] == 0x11 && p[2] == 0x22 && p[3] == 0x33) has_00112233 = true;
-    }
-    CHECK(has_11223344);
-    CHECK(has_00112233);
-}
-
 int main(void) {
     test_build_frames();
     test_parse_config();
@@ -280,7 +260,6 @@ int main(void) {
     test_ul_type_from_mode();
     test_reads_needed();
     test_key_and_uid();
-    test_common_passwords();
 
     printf("\n%d checks, %d failures\n", g_checks, g_fails);
     return g_fails == 0 ? 0 : 1;

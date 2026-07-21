@@ -513,27 +513,43 @@ Gen4DumpResult gen4_dump_run(Gen4Dump* dump) {
     dump->phase = Gen4DumpPhaseUnlock;
     dump->unlock_ok = false;
     bool card_present = false;
+    bool lost_field = false;
 
-    for(size_t i = 0; i <= GEN4_DUMP_COMMON_PASSWORD_COUNT; i++) {
+    // Try the password the user entered, then the documented factory default
+    // (all-zero) as a fallback if it differs. No dictionary sweep: a changed
+    // GTU password has no published "common" corpus, so it must be entered,
+    // not guessed. Each probe is its own field cycle so a wrong password can't
+    // wedge the card for the next attempt.
+    uint8_t candidates[2][GEN4_DUMP_PASSWORD_LEN];
+    memcpy(candidates[0], user_pwd, GEN4_DUMP_PASSWORD_LEN);
+    uint8_t candidate_count = 1;
+    static const uint8_t factory_default[GEN4_DUMP_PASSWORD_LEN] = {0};
+    if(memcmp(user_pwd, factory_default, GEN4_DUMP_PASSWORD_LEN) != 0) {
+        memcpy(candidates[candidate_count++], factory_default, GEN4_DUMP_PASSWORD_LEN);
+    }
+
+    for(uint8_t i = 0; i < candidate_count; i++) {
         if(dump->stop && *dump->stop) return Gen4DumpResultCanceled;
 
-        if(i == 0) {
-            memcpy(dump->password, user_pwd, GEN4_DUMP_PASSWORD_LEN);
-        } else {
-            const uint8_t* candidate = gen4_dump_common_passwords[i - 1];
-            if(memcmp(candidate, user_pwd, GEN4_DUMP_PASSWORD_LEN) == 0) continue;
-            memcpy(dump->password, candidate, GEN4_DUMP_PASSWORD_LEN);
-        }
-
+        memcpy(dump->password, candidates[i], GEN4_DUMP_PASSWORD_LEN);
         gen4_dump_field_cycle(dump);
-        if(dump->saw_card) card_present = true;
         if(dump->unlock_ok) break;
-        if(!dump->saw_card) break; // no card in the field — stop probing
+
+        if(dump->saw_card) {
+            card_present = true;
+        } else {
+            // No card this cycle: contact lost mid-probe if we'd already seen one,
+            // otherwise there was never a card. Either way, stop probing.
+            if(card_present) lost_field = true;
+            break;
+        }
     }
 
     if(!dump->unlock_ok) {
         memcpy(dump->password, user_pwd, GEN4_DUMP_PASSWORD_LEN);
-        return card_present ? Gen4DumpResultNotGen4 : Gen4DumpResultNoCard;
+        if(!card_present) return Gen4DumpResultNoCard;
+        if(lost_field) return Gen4DumpResultLostField;
+        return Gen4DumpResultNotGen4; // full sweep, card present, nothing unlocked
     }
 
     // Phase 2: full dump with the password that unlocked the card.
