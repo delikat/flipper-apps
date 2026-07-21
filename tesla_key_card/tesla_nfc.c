@@ -18,27 +18,30 @@
 
 #define TAG "TeslaNfc"
 
-/* Match the ATS an official Tesla key card presents: 05 78 77 91 02.
- *   T0  = 0x78  -> TA1, TB1, TC1 all present; FSCI = 8 (256-byte frame).
- *   TA1 = 0x77  -> the card's bit-rate capability byte.
- *   TB1 = 0x91  -> FWI = 9 (~2.5 s frame waiting time), SFGI = 1.
- *   TC1 = 0x02  -> CID supported.
+/* Present a fuller, real-card-like ATS: 04 38 77 91.
+ *   T0  = 0x38  -> TA1 and TB1 present; FSCI = 8 (256-byte frame). NOT TC1.
+ *   TA1 = 0x77  -> the bit-rate capability byte an official Tesla card uses.
+ *   TB1 = 0x91  -> FWI = 9, SFGI = 1 (the official card's values).
  *
  * On-device capture showed the vehicle SELECT our applet, get 9000, then drop
- * the field ~500 ms later WITHOUT ever sending GET_PUBLIC_KEY. The vehicle
- * validates the card at ISO-DEP activation, and our previous minimal ATS
- * (03 26 E0: no TA1/TC1, FSCI=6, no CID) did not look like a real card.
- * Advertising CID also matters at the frame layer: the firmware listener SKIPS a
- * CID-tagged I-block when the ATS did not claim CID support (TC1 bit 1), so a
- * post-SELECT command carrying a CID would be dropped before our code sees it,
- * which fits the symptom exactly. Note the reader ignores the advertised FWT
- * here (it uses its own ~500 ms window), so a large FWI does not buy the ECDH
- * more time -- keep the value the real card uses. */
-#define TESLA_ATS_TL  5U
-#define TESLA_ATS_T0  0x78U
+ * the field ~500 ms later WITHOUT ever sending GET_PUBLIC_KEY -- so it validates
+ * the card at ISO-DEP activation, and our earlier minimal ATS (03 26 E0: no TA1,
+ * FSCI=6) did not look like a real card. This restores the richer presentation.
+ *
+ * We deliberately DO NOT advertise CID (TC1 bit 1), even though a real card
+ * does. The reader is demonstrably sending UNTAGGED I-blocks: SELECT already
+ * succeeds with the no-CID ATS, and the firmware only delivers an untagged
+ * I-block when no CID was bound. If we claim CID, the RATS handler binds
+ * instance->cid to the reader's CID nibble, and iso14443_4_layer.c then SKIPS
+ * an untagged I-block whenever that nibble is non-zero -- which would drop the
+ * very SELECT that currently works. Claiming CID cannot unblock anything here
+ * (the reader is not tagging frames) and is pure downside on a one-shot trip;
+ * revisit only after a confirmed on-device SELECT with CID advertised. The
+ * reader also ignores the advertised FWT (it uses its own ~500 ms window). */
+#define TESLA_ATS_TL  4U
+#define TESLA_ATS_T0  0x38U
 #define TESLA_ATS_TA1 0x77U
 #define TESLA_ATS_TB1 0x91U
-#define TESLA_ATS_TC1 0x02U
 
 /* Number of received APDU bytes to hex-dump in the diagnostic log line. */
 #define TESLA_NFC_LOG_HEX_BYTES 24U
@@ -177,6 +180,14 @@ static NfcCommand tesla_nfc_listener_callback(NfcGenericEvent event, void* conte
     return NfcCommandContinue;
 }
 
+size_t tesla_nfc_ats_bytes(uint8_t* out, size_t capacity) {
+    /* Keep in sync with the ats_data assignments in tesla_nfc_alloc below. */
+    const uint8_t ats[] = {TESLA_ATS_TL, TESLA_ATS_T0, TESLA_ATS_TA1, TESLA_ATS_TB1};
+    if(capacity < sizeof(ats)) return 0;
+    memcpy(out, ats, sizeof(ats));
+    return sizeof(ats);
+}
+
 TeslaNfc* tesla_nfc_alloc(
     TeslaCrypto* crypto,
     const uint8_t uid[TESLA_NFC_UID_SIZE],
@@ -204,7 +215,6 @@ TeslaNfc* tesla_nfc_alloc(
     nfc->data->ats_data.t0 = TESLA_ATS_T0;
     nfc->data->ats_data.ta_1 = TESLA_ATS_TA1;
     nfc->data->ats_data.tb_1 = TESLA_ATS_TB1;
-    nfc->data->ats_data.tc_1 = TESLA_ATS_TC1;
     nfc->tx_buffer = bit_buffer_alloc(96U);
     tesla_apdu_init(&nfc->apdu, tesla_crypto_get_public_key(crypto), tesla_nfc_authenticate, nfc);
     return nfc;

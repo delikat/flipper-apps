@@ -44,3 +44,7 @@ TeslaNfc* tesla_nfc_alloc(
 void tesla_nfc_free(TeslaNfc* nfc);
 bool tesla_nfc_start(TeslaNfc* nfc);
 void tesla_nfc_stop(TeslaNfc* nfc);
+
+/* Copy the ATS bytes this build advertises into `out` (for diagnostics);
+ * returns the number written, or 0 if `capacity` is too small. */
+size_t tesla_nfc_ats_bytes(uint8_t* out, size_t capacity);

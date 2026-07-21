@@ -98,6 +98,69 @@ static void tesla_key_card_debug_log(TeslaKeyCardApp* app, const char* text) {
     storage_file_sync(app->debug_log);
 }
 
+static const char* tesla_key_card_event_tag(TeslaNfcEvent event) {
+    switch(event) {
+    case TeslaNfcEventSelect:
+        return "SELECT";
+    case TeslaNfcEventGetPublicKey:
+        return "GET_PUBKEY";
+    case TeslaNfcEventAuthenticate:
+        return "AUTH";
+    case TeslaNfcEventGetCardInfo:
+        return "CARD_INFO";
+    case TeslaNfcEventProtocolError:
+        return "PROTO_ERR";
+    case TeslaNfcEventTransmitError:
+        return "TX_ERR";
+    case TeslaNfcEventFieldOff:
+        return "FIELD_OFF";
+    case TeslaNfcEventHalted:
+        return "HALT";
+    default:
+        return "?";
+    }
+}
+
+/* Log the ATS this build advertises, so a capture can confirm the right binary
+ * is running. This records what the FAP CONFIGURED, not the RATS bytes that
+ * actually went over the air (those are emitted by the firmware, unseen here). */
+static void tesla_key_card_log_ats(TeslaKeyCardApp* app) {
+    uint8_t ats[8];
+    const size_t length = tesla_nfc_ats_bytes(ats, sizeof(ats));
+    char hex[3U * sizeof(ats) + 1U];
+    tesla_key_card_format_hex(ats, length, hex, sizeof(hex));
+    char line[48];
+    snprintf(line, sizeof(line), "ATS=%s", hex);
+    FURI_LOG_I(TAG, "%s", line);
+    tesla_key_card_debug_log(app, line);
+}
+
+/* Measure the AUTHENTICATE-cost ECDH once at startup -- on the app thread, before
+ * the NFC listener starts, so it cannot contend for the crypto object. Uses the
+ * card's own public key as a throwaway peer point: a valid on-curve, non-generator
+ * base, so this runs the exact ecp_check_pubkey -> variable-base ecp_mul -> SHA1 ->
+ * AES path AUTHENTICATE uses. Lets us learn the real crypto timing without the
+ * vehicle ever getting that far. */
+static void tesla_key_card_selftest_ecdh(TeslaKeyCardApp* app) {
+    const uint8_t* public_key = tesla_crypto_get_public_key(app->crypto);
+    if(!public_key) return;
+
+    uint8_t challenge[TESLA_CHALLENGE_SIZE] = {0};
+    uint8_t response[TESLA_AUTH_RESPONSE_SIZE] = {0};
+    const uint32_t start = furi_get_tick();
+    const bool ok = tesla_crypto_authenticate(app->crypto, public_key, challenge, response);
+    const uint32_t frequency = furi_kernel_get_tick_frequency();
+    const uint32_t elapsed_ms =
+        frequency == 0U ? 0U : ((furi_get_tick() - start) * 1000U) / frequency;
+    memset(response, 0, sizeof(response));
+
+    char line[48];
+    snprintf(
+        line, sizeof(line), "selftest ecdh=%lums ok=%d", (unsigned long)elapsed_ms, ok ? 1 : 0);
+    FURI_LOG_I(TAG, "%s", line);
+    tesla_key_card_debug_log(app, line);
+}
+
 static const char* tesla_key_card_state_text(TeslaUiState state) {
     switch(state) {
     case TeslaUiStateInitializing:
@@ -229,7 +292,7 @@ static void tesla_key_card_handle_nfc_event(TeslaKeyCardApp* app, const TeslaNfc
     /* One trace line per frame: the raw request bytes plus how we answered.
      * This is what distinguishes "reader quits right after SELECT" from
      * "reader sends command X and we reject it" -- the coarse event cannot. */
-    char line[96];
+    char line[128];
     if(info->event == TeslaNfcEventFieldOff) {
         snprintf(line, sizeof(line), "field off");
     } else if(info->event == TeslaNfcEventHalted) {
@@ -237,25 +300,29 @@ static void tesla_key_card_handle_nfc_event(TeslaKeyCardApp* app, const TeslaNfc
     } else {
         char hex[3U * TESLA_NFC_APDU_PREVIEW + 1U];
         tesla_key_card_format_hex(info->preview, info->preview_len, hex, sizeof(hex));
+        /* ev= is the load-bearing field: a failed send still computes SW=9000,
+         * so without the outcome tag a transmit error reads as a success. */
         if(info->crypto_time_ms > 0U) {
             snprintf(
                 line,
                 sizeof(line),
-                "RX %uB [%s] SW=%04X resp=%uB ecdh=%ums",
+                "RX %uB [%s] SW=%04X resp=%uB ecdh=%ums ev=%s",
                 (unsigned)info->apdu_len,
                 hex,
                 (unsigned)info->status_word,
                 (unsigned)info->response_len,
-                (unsigned)info->crypto_time_ms);
+                (unsigned)info->crypto_time_ms,
+                tesla_key_card_event_tag(info->event));
         } else {
             snprintf(
                 line,
                 sizeof(line),
-                "RX %uB [%s] SW=%04X resp=%uB",
+                "RX %uB [%s] SW=%04X resp=%uB ev=%s",
                 (unsigned)info->apdu_len,
                 hex,
                 (unsigned)info->status_word,
-                (unsigned)info->response_len);
+                (unsigned)info->response_len,
+                tesla_key_card_event_tag(info->event));
         }
     }
     tesla_key_card_debug_log(app, line);
@@ -478,6 +545,10 @@ int32_t tesla_key_card_app(void* context) {
 
     TeslaUiState initial_state = TeslaUiStateError;
     if(app->crypto && tesla_key_card_prepare_identity(app)) {
+        /* Record the advertised ATS and the real ECDH time before the listener
+         * starts: both land in the SD trace regardless of how far the car gets. */
+        tesla_key_card_log_ats(app);
+        tesla_key_card_selftest_ecdh(app);
         tesla_key_card_update_nfc(app);
         initial_state = app->nfc ? TeslaUiStateReady : TeslaUiStateError;
     }
