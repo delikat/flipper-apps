@@ -1,0 +1,14 @@
+App(
+    appid="gen4_dump",
+    name="Gen4 UMC Dump",
+    apptype=FlipperAppType.EXTERNAL,
+    entry_point="gen4_dump_app",
+    requires=["gui"],
+    targets=["f7"],
+    stack_size=4 * 1024,
+    sources=["*.c", "!tests"],
+    fap_version="0.1.0",
+    fap_category="NFC",
+    fap_description="Dump a Gen4 'Ultimate Magic Card' over its backdoor (0xCE) to a .nfc file: MIFARE Classic (with keys) and Ultralight/NTAG.",
+    fap_author="delikat",
+)

@@ -10,6 +10,7 @@ firmware is Unleashed; each app lives in its own subdirectory with its own
 | App | What it does |
 |-----|--------------|
 | [`mfc_ndef_format`](mfc_ndef_format/) | Format a MIFARE Classic 1K into an empty NDEF (NFC) tag — a port of the Proxmark3 `hf mf ndefformat` command. Fills a gap: the Flipper NFC stack reads and parses NDEF but has no built-in way to *format* a blank Classic as NDEF. |
+| [`gen4_dump`](gen4_dump/) | Dump a Gen4 "Ultimate Magic Card" (UMC) over its backdoor (`0xCE`) to a `.nfc` file — MIFARE Classic (keys included) and Ultralight/NTAG. Fills a gap no tool has: the Flipper NFC Magic app (and every firmware fork) can *write* the Gen4 backdoor but never *reads* it. |
 | [`tesla_key_card`](tesla_key_card/) | Experimental Tesla key-card NFC applet flow, so the owner can add the Flipper as a new key through Tesla's normal, driver-authorized pairing flow. |
 
 ## Build & install

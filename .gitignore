@@ -8,6 +8,7 @@ dist/
 # compiled host test binaries
 mfc_ndef_format/tests/test_ndef_layout
 tesla_key_card/tests/test_apdu
+gen4_dump/tests/test_gen4_dump_core
 
 # macOS
 .DS_Store
