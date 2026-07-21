@@ -10,5 +10,22 @@ App(
     fap_version="0.1.0",
     fap_category="NFC",
     fap_description="Experimental Tesla key card implementation",
-    fap_libs=["mbedtls"],
+    # Vendored mbedTLS 3.6.2 (same sources as the firmware's shared "mbedtls",
+    # curated to the same 13 files) but built from lib/mbedtls/include/mbedtls/
+    # mbedtls_config.h, which re-enables 64-bit multiply/divide and widens the
+    # ECP window for a ~3x faster P-256 ECDH. Replaces fap_libs=["mbedtls"].
+    # -mword-relocations/-mlong-calls are required for the lib to link into a FAP.
+    fap_private_libs=[
+        Lib(
+            name="mbedtls",
+            fap_include_paths=["include"],
+            sources=["library/*.c"],
+            cincludes=["lib/mbedtls/include", "lib/mbedtls/library"],
+            cflags=[
+                "-mword-relocations",
+                "-mlong-calls",
+                "-Wno-redundant-decls",
+            ],
+        ),
+    ],
 )
